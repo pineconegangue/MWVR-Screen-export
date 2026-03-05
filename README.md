@@ -1,10 +1,6 @@
-<img width="670" height="308" alt="image" src="https://github.com/user-attachments/assets/7a307e4c-4a11-4741-baf1-f883fcab75d8" /># MWVR-Screen-export
 A tool for exporting Mechwarrior VR's HUD screens to a MFD or second monitor
 
-
-
 https://github.com/user-attachments/assets/c656b5cd-2815-48f7-a1f9-5116d39b3c83
-
 
 https://github.com/user-attachments/assets/6366acce-2a73-40ca-b0c1-bdcb68f87070
 
