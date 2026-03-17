@@ -394,11 +394,11 @@ void HUD::ProcessHUDWidget(const FWidget3DSceneProxy *proxy, const TArray<const 
     widget->RenderTargetSizeY = proxy->RenderTarget->SizeY;
 
     // Log MFD screen sizes to debug cropping
-    if ((int)widget->Type >= 4 && (int)widget->Type <= 9)
-    {
-        Instance->LogInfo("MFD Widget %d: Captured texture size %dx%d", (int)widget->Type, proxy->RenderTarget->SizeX,
-                          proxy->RenderTarget->SizeY);
-    }
+    //if ((int)widget->Type >= 4 && (int)widget->Type <= 9)
+    //{
+        //Instance->LogInfo("MFD Widget %d: Captured texture size %dx%d", (int)widget->Type, proxy->RenderTarget->SizeX,
+                          //proxy->RenderTarget->SizeY);
+    //}
 
     const auto &m = GetModelMatrix(proxy->LocalToWorld, widget->RenderTargetSizeX, widget->RenderTargetSizeY, 1.0f);
 

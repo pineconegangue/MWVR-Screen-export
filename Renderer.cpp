@@ -664,12 +664,9 @@ bool Renderer::EnsureSharedTextureForWidget(ID3D11Device *device, int widgetInde
 
     if (buffer.Texture)
     {
-        buffer.Texture.Reset();
-        if (buffer.SharedHandle)
-        {
-            CloseHandle(buffer.SharedHandle);
-            buffer.SharedHandle = nullptr;
-        }
+        buffer.Texture.Reset(); // This automatically closes the shared handle
+        // Don't manually close the handle - D3D11 manages it
+        buffer.SharedHandle = nullptr;
     }
 
     D3D11_TEXTURE2D_DESC desc{};

@@ -2,6 +2,7 @@
 #include <d3dcompiler.h>
 #include <dxgi.h>
 #include <dxgi1_2.h>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -74,6 +75,15 @@ class HUDDisplay
     UINT hotkeyModifier = 0;
     std::string modifierName = "None";
 
+    // Window position/size config
+    struct WindowConfig
+    {
+        int x = 100;
+        int y = 100;
+        int width = 777;
+        int height = 809;
+    } windowConfig;
+
     // Screen capture variables
     ComPtr<ID3D11Texture2D> screenCaptureTexture;
     ComPtr<ID3D11ShaderResourceView> screenCaptureSRV;
@@ -117,6 +127,95 @@ class HUDDisplay
         std::cout << msg << std::endl;
     }
 
+    std::string GetConfigPath()
+    {
+        char path[MAX_PATH];
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        std::string exePath(path);
+        size_t lastSlash = exePath.find_last_of("\\/");
+        return exePath.substr(0, lastSlash + 1) + "HUDDisplay_" + modifierName + ".ini";
+    }
+
+    void LoadWindowConfig()
+    {
+        std::string configPath = GetConfigPath();
+        std::ifstream file(configPath);
+        if (!file.is_open())
+        {
+            Log("No config file found, using defaults");
+            return;
+        }
+
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (line.empty() || line[0] == '#')
+                continue;
+
+            size_t eq = line.find('=');
+            if (eq == std::string::npos)
+                continue;
+
+            std::string key = line.substr(0, eq);
+            std::string value = line.substr(eq + 1);
+
+            if (key == "x")
+                windowConfig.x = std::stoi(value);
+            else if (key == "y")
+                windowConfig.y = std::stoi(value);
+            else if (key == "width")
+                windowConfig.width = std::stoi(value);
+            else if (key == "height")
+                windowConfig.height = std::stoi(value);
+        }
+
+        Log("Loaded window config: " + std::to_string(windowConfig.x) + "," + std::to_string(windowConfig.y) + " " +
+            std::to_string(windowConfig.width) + "x" + std::to_string(windowConfig.height));
+    }
+
+    void SaveWindowConfig()
+    {
+        if (!hwnd || !IsWindow(hwnd))
+            return;
+
+        RECT rect;
+        if (!GetWindowRect(hwnd, &rect))
+        {
+            Log("Failed to get window rect");
+            return;
+        }
+
+        // Validate values are reasonable (not garbage)
+        if (rect.left < -10000 || rect.left > 10000 || rect.top < -10000 || rect.top > 10000 ||
+            (rect.right - rect.left) < 100 || (rect.right - rect.left) > 5000 || (rect.bottom - rect.top) < 100 ||
+            (rect.bottom - rect.top) > 5000)
+        {
+            Log("Window rect has invalid values, not saving");
+            return;
+        }
+
+        windowConfig.x = rect.left;
+        windowConfig.y = rect.top;
+        windowConfig.width = rect.right - rect.left;
+        windowConfig.height = rect.bottom - rect.top;
+
+        std::string configPath = GetConfigPath();
+        std::ofstream file(configPath);
+        if (!file.is_open())
+        {
+            Log("Failed to save config");
+            return;
+        }
+
+        file << "# HUDDisplay Window Configuration\n";
+        file << "x=" << windowConfig.x << "\n";
+        file << "y=" << windowConfig.y << "\n";
+        file << "width=" << windowConfig.width << "\n";
+        file << "height=" << windowConfig.height << "\n";
+
+        Log("Saved window config to " + configPath);
+    }
+
     bool InitWindow()
     {
         WNDCLASSEXW wc = {};
@@ -141,15 +240,10 @@ class HUDDisplay
             title += L" (" + wModifier + L")";
         }
 
-        // We want a client area of 777x809
-        // Calculate window size needed to achieve that (accounting for title bar + borders)
-        RECT rect = {0, 0, 777, 809};
-        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-        int windowWidth = rect.right - rect.left;
-        int windowHeight = rect.bottom - rect.top;
-
-        hwnd = CreateWindowExW(WS_EX_TOPMOST, L"HUDDisplayClass", title.c_str(), WS_OVERLAPPEDWINDOW, 100, 100,
-                               windowWidth, windowHeight, nullptr, nullptr, GetModuleHandle(nullptr), this);
+        // Use saved position/size from config
+        hwnd = CreateWindowExW(WS_EX_TOPMOST, L"HUDDisplayClass", title.c_str(), WS_OVERLAPPEDWINDOW, windowConfig.x,
+                               windowConfig.y, windowConfig.width, windowConfig.height, nullptr, nullptr,
+                               GetModuleHandle(nullptr), this);
 
         if (!hwnd)
         {
@@ -641,6 +735,23 @@ class HUDDisplay
 
         // Check if current widget's handle changed or texture is missing
         auto &info = controlBlock.Widgets[currentWidget];
+
+        // If widget is not active, clear cached resources and show black screen
+        if (!info.Active)
+        {
+            sharedTextures[currentWidget].Reset();
+            sharedSRVs[currentWidget].Reset();
+            cachedTextures[currentWidget].Reset();
+            cachedSRVs[currentWidget].Reset();
+            lastKnownHandles[currentWidget] = nullptr;
+
+            // Clear to black
+            float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            context->ClearRenderTargetView(backBufferRTV.Get(), clearColor);
+            swapChain->Present(1, 0);
+            return;
+        }
+
         bool needsReopen = !sharedTextures[currentWidget] || !sharedSRVs[currentWidget] ||
                            (info.SharedTextureHandle && lastKnownHandles[currentWidget] != info.SharedTextureHandle);
 
@@ -669,11 +780,35 @@ class HUDDisplay
             if (SUCCEEDED(hr))
             {
                 // Successfully got the mutex - copy to our local cache
-                if (!cachedTextures[currentWidget])
+
+                // Get shared texture descriptor
+                D3D11_TEXTURE2D_DESC sharedDesc;
+                sharedTextures[currentWidget]->GetDesc(&sharedDesc);
+
+                // Check if cached texture exists and matches size
+                bool needsRecreate = !cachedTextures[currentWidget];
+                if (cachedTextures[currentWidget])
                 {
-                    // Create cached texture on first use
-                    D3D11_TEXTURE2D_DESC desc;
-                    sharedTextures[currentWidget]->GetDesc(&desc);
+                    D3D11_TEXTURE2D_DESC cachedDesc;
+                    cachedTextures[currentWidget]->GetDesc(&cachedDesc);
+
+                    // Recreate if size changed
+                    if (cachedDesc.Width != sharedDesc.Width || cachedDesc.Height != sharedDesc.Height)
+                    {
+                        Log("Cached texture size mismatch for widget " + std::to_string(currentWidget) + " (" +
+                            std::to_string(cachedDesc.Width) + "x" + std::to_string(cachedDesc.Height) + " -> " +
+                            std::to_string(sharedDesc.Width) + "x" + std::to_string(sharedDesc.Height) +
+                            "), recreating");
+                        cachedTextures[currentWidget].Reset();
+                        cachedSRVs[currentWidget].Reset();
+                        needsRecreate = true;
+                    }
+                }
+
+                if (needsRecreate)
+                {
+                    // Create cached texture matching shared texture size
+                    D3D11_TEXTURE2D_DESC desc = sharedDesc;
                     desc.MiscFlags = 0; // Remove shared flag for local copy
 
                     if (SUCCEEDED(
@@ -681,6 +816,8 @@ class HUDDisplay
                     {
                         device->CreateShaderResourceView(cachedTextures[currentWidget].Get(), nullptr,
                                                          cachedSRVs[currentWidget].GetAddressOf());
+                        Log("Created cached texture for widget " + std::to_string(currentWidget) + " (" +
+                            std::to_string(desc.Width) + "x" + std::to_string(desc.Height) + ")");
                     }
                 }
 
@@ -742,6 +879,11 @@ class HUDDisplay
         {
             switch (msg)
             {
+            case WM_CLOSE:
+                // Save window position/size before closing
+                display->SaveWindowConfig();
+                // Let default handler destroy the window
+                break;
             case WM_DESTROY:
                 display->running = false;
                 PostQuitMessage(0);
@@ -880,6 +1022,9 @@ class HUDDisplay
             Log("  " + modifierName + "+Numpad 1=Target, 2=Weapons, 3=Owner, 4=Objectives, 5=Map, 6=Comms");
             Log("  " + modifierName + "+Numpad 7=Cycle Forward, 8=Cycle Backward, 9=Screen Capture, ESC=Exit");
         }
+
+        // Load saved window position/size
+        LoadWindowConfig();
 
         if (!InitWindow())
             return false;
